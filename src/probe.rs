@@ -3,10 +3,10 @@
 //! v1 and v2 probes are supported; v1 probes use `hidapi` to communicate with HID
 //! reports, while v2 probes use `rusb` to directly read/write the v2 bulk endpoint.
 
+use hidapi::{DeviceInfo, HidApi};
+use rusb::{Context, Device, UsbContext};
 use std::time::Duration;
 use thiserror::Error;
-use rusb::{Device, Context, UsbContext};
-use hidapi::{HidApi, DeviceInfo};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -120,7 +120,12 @@ impl Probe {
                         let out_ep = eps[0].address();
                         let in_ep = eps[1].address();
                         let max_packet_size = eps[1].max_packet_size() as usize;
-                        return Ok(Probe::V2 { handle, out_ep, in_ep, max_packet_size });
+                        return Ok(Probe::V2 {
+                            handle,
+                            out_ep,
+                            in_ep,
+                            max_packet_size,
+                        });
                     }
                     Err(_) => continue,
                 }
@@ -134,7 +139,7 @@ impl Probe {
         log::trace!("Attempting to open in CMSIS-DAPv1 mode: {}", info);
         let hid_device = match info.sn.clone() {
             Some(sn) => HidApi::new().and_then(|api| api.open_serial(info.vid, info.pid, &sn)),
-            None     => HidApi::new().and_then(|api| api.open(info.vid, info.pid)),
+            None => HidApi::new().and_then(|api| api.open(info.vid, info.pid)),
         };
         match hid_device {
             Ok(device) => match device.get_product_string() {
@@ -142,8 +147,11 @@ impl Probe {
                     log::debug!("Successfully opened v1 probe: {:?}", info);
                     // Start with a default of 64 byte packet size, which is
                     // the most common report size for CMSIS-DAPv1 HID devices.
-                    Ok(Probe::V1 { device, report_size: 64 })
-                },
+                    Ok(Probe::V1 {
+                        device,
+                        report_size: 64,
+                    })
+                }
                 _ => Err(Error::NotFound),
             },
             _ => Err(Error::NotFound),
@@ -155,13 +163,14 @@ impl Probe {
         log::trace!("Draining pending data from probe");
         let mut buf = vec![0u8; 1024];
         match self {
-            Self::V1 { device, report_size } => {
-                loop {
-                    match device.read_timeout(&mut buf[..*report_size], 1) {
-                        Ok(n) if n > 0 => continue,
-                        Ok(_) => break,
-                        Err(e) => return Err(e.into()),
-                    }
+            Self::V1 {
+                device,
+                report_size,
+            } => loop {
+                match device.read_timeout(&mut buf[..*report_size], 1) {
+                    Ok(n) if n > 0 => continue,
+                    Ok(_) => break,
+                    Err(e) => return Err(e.into()),
                 }
             },
             Self::V2 { handle, in_ep, .. } => {
@@ -174,7 +183,7 @@ impl Probe {
                         Err(e) => return Err(e.into()),
                     }
                 }
-            },
+            }
         };
         Ok(())
     }
@@ -185,7 +194,9 @@ impl Probe {
         // report which is exactly this size.
         let bufsize = match self {
             Self::V1 { report_size, .. } => *report_size,
-            Self::V2 { max_packet_size, .. } => *max_packet_size,
+            Self::V2 {
+                max_packet_size, ..
+            } => *max_packet_size,
         };
         let mut buf = vec![0u8; bufsize];
         let n = match self {
@@ -193,7 +204,7 @@ impl Probe {
             Self::V2 { handle, in_ep, .. } => {
                 let timeout = Duration::from_millis(100);
                 handle.read_bulk(*in_ep, &mut buf[..], timeout)?
-            },
+            }
         };
         buf.truncate(n);
         log::trace!("RX: {:02X?}", buf);
@@ -204,7 +215,11 @@ impl Probe {
     pub fn write(&self, buf: &[u8]) -> Result<usize> {
         log::trace!("TX: {:02X?}", buf);
         match self {
-            Self::V1 { device, report_size, .. } => {
+            Self::V1 {
+                device,
+                report_size,
+                ..
+            } => {
                 let mut buf = buf.to_vec();
                 // Extend buffer to report size for HID access, which requires
                 // exactly report-sized packets.
@@ -212,11 +227,11 @@ impl Probe {
                 // Insert HID report ID at start.
                 buf.insert(0, 0);
                 Ok(device.write(&buf[..])?)
-            },
+            }
             Self::V2 { handle, out_ep, .. } => {
                 let timeout = Duration::from_millis(10);
                 Ok(handle.write_bulk(*out_ep, buf, timeout)?)
-            },
+            }
         }
     }
 }
@@ -243,7 +258,10 @@ impl ProbeInfo {
         log::trace!("Searching for CMSIS-DAP probes");
 
         let mut probes = match Context::new().and_then(|ctx| ctx.devices()) {
-            Ok(devices) => devices.iter().filter_map(|d| Self::from_device(&d)).collect(),
+            Ok(devices) => devices
+                .iter()
+                .filter_map(|d| Self::from_device(&d))
+                .collect(),
             Err(_) => vec![],
         };
 
@@ -274,12 +292,22 @@ impl ProbeInfo {
         }
         let vid = u16::from_str_radix(parts[0], 16).or(Err(Error::InvalidSpecifier))?;
         let pid = u16::from_str_radix(parts[1], 16).or(Err(Error::InvalidSpecifier))?;
-        let sn = if parts.len() >= 3 { Some(parts[2].to_owned()) } else { None };
+        let sn = if parts.len() >= 3 {
+            Some(parts[2].to_owned())
+        } else {
+            None
+        };
         if parts.len() == 4 && parts[3] != "v1" {
             return Err(Error::InvalidSpecifier);
         }
         let v1_only = parts.len() == 4 && parts[3] == "v1";
-        Ok(ProbeInfo { name: None, vid, pid, sn, v1_only })
+        Ok(ProbeInfo {
+            name: None,
+            vid,
+            pid,
+            sn,
+            v1_only,
+        })
     }
 
     /// Attempt to open a Probe corresponding to this ProbeInfo.
@@ -291,11 +319,13 @@ impl ProbeInfo {
             if let Ok(devices) = Context::new().and_then(|ctx| ctx.devices()) {
                 for device in devices.iter() {
                     match ProbeInfo::from_device(&device) {
-                        Some(info) => if info.matches(self) {
-                            if let Ok(probe) = Probe::from_device(device) {
-                                return Ok(probe);
+                        Some(info) => {
+                            if info.matches(self) {
+                                if let Ok(probe) = Probe::from_device(device) {
+                                    return Ok(probe);
+                                }
                             }
-                        },
+                        }
                         None => continue,
                     }
                 }
@@ -316,23 +346,25 @@ impl ProbeInfo {
             Err(error) => {
                 log::trace!("Could not get descriptor: {}", error);
                 return None;
-            },
+            }
             Ok(desc) => desc,
         };
         let handle = match device.open() {
             Err(error) => {
                 log::trace!("Could not get a device handle: {}", error);
                 return None;
-            },
+            }
             Ok(handle) => handle,
         };
         let language = match handle.read_languages(timeout) {
             Err(error) => {
                 log::trace!("Could not get the device languages: {}", error);
                 return None;
-            },
+            }
             Ok(languages) => languages,
-        }.get(0).cloned()?;
+        }
+        .get(0)
+        .cloned()?;
 
         // Check all interfaces for any strings containing CMSIS-DAP.
         let mut iface_str_matches = false;
@@ -343,15 +375,17 @@ impl ProbeInfo {
                     Ok(istr) if istr.contains("CMSIS-DAP") => {
                         iface_str_matches = true;
                         break 'iloop;
-                    },
-                    Ok(_)  => continue,
+                    }
+                    Ok(_) => continue,
                     Err(_) => continue,
                 }
             }
         }
 
         let prod_str = handle.read_product_string(language, &desc, timeout).ok()?;
-        let sn_str = handle.read_serial_number_string(language, &desc, timeout).ok();
+        let sn_str = handle
+            .read_serial_number_string(language, &desc, timeout)
+            .ok();
         if prod_str.contains("CMSIS-DAP") || iface_str_matches {
             Some(Self {
                 name: Some(prod_str),

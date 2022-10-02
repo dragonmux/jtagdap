@@ -135,53 +135,80 @@ macro_rules! bv {
 
 #[test]
 fn test_bits_to_bytes() {
-    assert_eq!(bits_to_bytes(&[]),                                      vec![]);
-    assert_eq!(bits_to_bytes(bv![1, 1, 1, 0]),                          vec![0x07]);
-    assert_eq!(bits_to_bytes(bv![1, 1, 1, 0, 0, 1, 0, 0]),              vec![0x27]);
-    assert_eq!(bits_to_bytes(bv![1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1]),  vec![0x27, 0x08]);
+    assert_eq!(bits_to_bytes(&[]), vec![]);
+    assert_eq!(bits_to_bytes(bv![1, 1, 1, 0]), vec![0x07]);
+    assert_eq!(bits_to_bytes(bv![1, 1, 1, 0, 0, 1, 0, 0]), vec![0x27]);
+    assert_eq!(
+        bits_to_bytes(bv![1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1]),
+        vec![0x27, 0x08]
+    );
 }
 
 #[test]
 fn test_bytes_to_bits() {
     assert_eq!(bytes_to_bits(&[0xFF], 1).unwrap(), bv![1]);
-    assert_eq!(bytes_to_bits(&[0xFF], 8).unwrap(), bv![1, 1, 1, 1, 1, 1, 1, 1]);
-    assert_eq!(bytes_to_bits(&[0xFF, 0x01], 10).unwrap(), bv![1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
+    assert_eq!(
+        bytes_to_bits(&[0xFF], 8).unwrap(),
+        bv![1, 1, 1, 1, 1, 1, 1, 1]
+    );
+    assert_eq!(
+        bytes_to_bits(&[0xFF, 0x01], 10).unwrap(),
+        bv![1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
+    );
     assert!(bytes_to_bits(&[0xFF], 9).is_err());
 }
 
 #[test]
 fn test_drain_word() {
-    assert_eq!(drain_word(bv![1, 0   ], 2).unwrap(), (0b01, bv![]));
+    assert_eq!(drain_word(bv![1, 0], 2).unwrap(), (0b01, bv![]));
     assert_eq!(drain_word(bv![1, 0, 1], 2).unwrap(), (0b01, bv![1]));
     assert!(drain_word(bv![1, 0, 1], 4).is_err());
 }
 
 #[test]
 fn test_drain_bit() {
-    assert_eq!(drain_bit(bv![1   ]).unwrap(), (1,  bv![]));
+    assert_eq!(drain_bit(bv![1]).unwrap(), (1, bv![]));
     assert_eq!(drain_bit(bv![0, 1]).unwrap(), (0, bv![1]));
 }
 
 #[test]
 fn test_drain_u8() {
-    assert_eq!(drain_u8(bv![1, 0, 0, 0, 1, 0, 1, 0      ]).unwrap(), (0x51, bv![]));
-    assert_eq!(drain_u8(bv![1, 0, 0, 0, 1, 0, 1, 0, 1, 1]).unwrap(), (0x51, bv![1, 1]));
+    assert_eq!(
+        drain_u8(bv![1, 0, 0, 0, 1, 0, 1, 0]).unwrap(),
+        (0x51, bv![])
+    );
+    assert_eq!(
+        drain_u8(bv![1, 0, 0, 0, 1, 0, 1, 0, 1, 1]).unwrap(),
+        (0x51, bv![1, 1])
+    );
 }
 
 #[test]
 fn test_drain_u16() {
-    assert_eq!(drain_u16(bv![1, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0]).unwrap(),
-               (0x4351, bv![]));
-    assert_eq!(drain_u16(bv![1, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
-                             0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1]).unwrap(),
-               (0x4351,  bv![0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1]));
+    assert_eq!(
+        drain_u16(bv![1, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0]).unwrap(),
+        (0x4351, bv![])
+    );
+    assert_eq!(
+        drain_u16(bv![
+            1, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1,
+            1, 0, 1
+        ])
+        .unwrap(),
+        (0x4351, bv![0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1])
+    );
 }
 
 #[test]
 fn test_drain_u32() {
-    assert_eq!(drain_u32(bv![1, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
-                             0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1]).unwrap(),
-               (0xBCAE4351,  bv![]));
+    assert_eq!(
+        drain_u32(bv![
+            1, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1,
+            1, 0, 1
+        ])
+        .unwrap(),
+        (0xBCAE4351, bv![])
+    );
 }
 
 #[test]
@@ -209,18 +236,21 @@ fn test_append_u8() {
 fn test_append_u16() {
     let mut bits = bv![1, 1, 1, 1].to_vec();
     append_u16(&mut bits, 0x55AA);
-    assert_eq!(&bits[..], bv![1, 1, 1, 1,
-                              0, 1, 0, 1, 0, 1, 0, 1,
-                              1, 0, 1, 0, 1, 0, 1, 0]);
+    assert_eq!(
+        &bits[..],
+        bv![1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0]
+    );
 }
 
 #[test]
 fn test_append_u32() {
     let mut bits = bv![1, 1, 1, 1].to_vec();
     append_u32(&mut bits, 0x76543210);
-    assert_eq!(&bits[..], bv![1, 1, 1, 1,
-                              0, 0, 0, 0, 1, 0, 0, 0,
-                              0, 1, 0, 0, 1, 1, 0, 0,
-                              0, 0, 1, 0, 1, 0, 1, 0,
-                              0, 1, 1, 0, 1, 1, 1, 0]);
+    assert_eq!(
+        &bits[..],
+        bv![
+            1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0,
+            1, 1, 0, 1, 1, 1, 0
+        ]
+    );
 }

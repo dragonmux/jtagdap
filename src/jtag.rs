@@ -4,9 +4,9 @@
 //! The JTAG chain may be scanned for TAPs, and then a TAP interface created to
 //! address that specific device.
 
-use std::time::Duration;
-use crate::dap::{DAP, Error as DAPError};
 use crate::bitvec::{bits_to_bytes, bytes_to_bits, drain_u32, Error as BitVecError};
+use crate::dap::{Error as DAPError, DAP};
+use std::time::Duration;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -72,7 +72,11 @@ impl JTAG {
     /// The initial state is TAPState::Unknown; the only way to enter a
     /// known state is by calling `enter_test_logic_reset()` to reset.
     pub fn new(dap: DAP) -> JTAG {
-        JTAG { dap, state: TAPState::Unknown, max_length: 128 }
+        JTAG {
+            dap,
+            state: TAPState::Unknown,
+            max_length: 128,
+        }
     }
 
     /// Set the maximum scan chain length to attempt to detect.
@@ -109,7 +113,11 @@ impl JTAG {
         if index < chain.n_taps() {
             Ok(JTAGTAP::new(self, chain, index))
         } else {
-            log::error!("Requested TAP {}, but there are only {} TAPs.", index, chain.n_taps());
+            log::error!(
+                "Requested TAP {}, but there are only {} TAPs.",
+                index,
+                chain.n_taps()
+            );
             Err(Error::InvalidTAPIndex)
         }
     }
@@ -126,13 +134,13 @@ impl JTAG {
     pub fn enter_run_test_idle(&mut self) -> Result<()> {
         log::trace!("JTAG state: {:?} -> RunTestIdle", self.state);
         match self.state {
-            TAPState::RunTestIdle                   => (),
-            TAPState::TestLogicReset                => self.mode(bv![0])?,
-            TAPState::Exit1DR  | TAPState::Exit1IR  => self.mode(bv![1, 0])?,
-            TAPState::PauseDR  | TAPState::PauseIR  => self.mode(bv![1, 1, 0])?,
+            TAPState::RunTestIdle => (),
+            TAPState::TestLogicReset => self.mode(bv![0])?,
+            TAPState::Exit1DR | TAPState::Exit1IR => self.mode(bv![1, 0])?,
+            TAPState::PauseDR | TAPState::PauseIR => self.mode(bv![1, 1, 0])?,
             TAPState::UpdateDR | TAPState::UpdateIR => self.mode(bv![0])?,
-            TAPState::ShiftDR  | TAPState::ShiftIR  => self.mode(bv![1, 1, 0])?,
-            _                                       => return Err(Error::BadState),
+            TAPState::ShiftDR | TAPState::ShiftIR => self.mode(bv![1, 1, 0])?,
+            _ => return Err(Error::BadState),
         };
         self.state = TAPState::RunTestIdle;
         Ok(())
@@ -148,14 +156,14 @@ impl JTAG {
     pub fn enter_shift_dr(&mut self) -> Result<()> {
         log::trace!("JTAG state: {:?} -> ShiftDR", self.state);
         match self.state {
-            TAPState::ShiftDR                       => (),
-            TAPState::TestLogicReset                => self.mode(bv![0, 1, 0, 0])?,
-            TAPState::RunTestIdle                   => self.mode(bv![1, 0, 0])?,
-            TAPState::Exit1DR                       => self.mode(bv![0, 1, 0])?,
-            TAPState::PauseIR                       => self.mode(bv![1, 1, 1, 0, 0])?,
-            TAPState::PauseDR                       => self.mode(bv![1, 0])?,
+            TAPState::ShiftDR => (),
+            TAPState::TestLogicReset => self.mode(bv![0, 1, 0, 0])?,
+            TAPState::RunTestIdle => self.mode(bv![1, 0, 0])?,
+            TAPState::Exit1DR => self.mode(bv![0, 1, 0])?,
+            TAPState::PauseIR => self.mode(bv![1, 1, 1, 0, 0])?,
+            TAPState::PauseDR => self.mode(bv![1, 0])?,
             TAPState::UpdateIR | TAPState::UpdateDR => self.mode(bv![1, 0, 0])?,
-            _                                       => return Err(Error::BadState),
+            _ => return Err(Error::BadState),
         }
         self.state = TAPState::ShiftDR;
         Ok(())
@@ -165,9 +173,9 @@ impl JTAG {
     pub fn enter_pause_dr(&mut self) -> Result<()> {
         log::trace!("JTAG state: {:?} -> PauseDR", self.state);
         match self.state {
-            TAPState::PauseDR                       => (),
-            TAPState::Exit1DR                       => self.mode(bv![0])?,
-            _                                       => return Err(Error::BadState),
+            TAPState::PauseDR => (),
+            TAPState::Exit1DR => self.mode(bv![0])?,
+            _ => return Err(Error::BadState),
         }
         self.state = TAPState::PauseDR;
         Ok(())
@@ -177,29 +185,28 @@ impl JTAG {
     pub fn enter_update_dr(&mut self) -> Result<()> {
         log::trace!("JTAG state: {:?} -> UpdateDR", self.state);
         match self.state {
-            TAPState::UpdateDR                      => (),
-            TAPState::ShiftDR                       => self.mode(bv![1, 1])?,
-            TAPState::Exit1DR                       => self.mode(bv![1])?,
-            _                                       => return Err(Error::BadState),
+            TAPState::UpdateDR => (),
+            TAPState::ShiftDR => self.mode(bv![1, 1])?,
+            TAPState::Exit1DR => self.mode(bv![1])?,
+            _ => return Err(Error::BadState),
         }
         self.state = TAPState::UpdateDR;
         Ok(())
     }
 
-
     /// Enter Shift-IR state from Test-Logic-Reset, Run-Test/Idle, Update*, or Pause*.
     pub fn enter_shift_ir(&mut self) -> Result<()> {
         log::trace!("JTAG state: {:?} -> ShiftIR", self.state);
         match self.state {
-            TAPState::ShiftIR                       => (),
-            TAPState::TestLogicReset                => self.mode(bv![0, 1, 1, 0, 0])?,
-            TAPState::RunTestIdle                   => self.mode(bv![1, 1, 0, 0])?,
-            TAPState::Exit1IR                       => self.mode(bv![0, 1, 0])?,
-            TAPState::Exit1DR                       => self.mode(bv![1, 1, 1, 0, 0])?,
-            TAPState::PauseIR                       => self.mode(bv![1, 0])?,
-            TAPState::PauseDR                       => self.mode(bv![1, 1, 1, 1, 0, 0])?,
+            TAPState::ShiftIR => (),
+            TAPState::TestLogicReset => self.mode(bv![0, 1, 1, 0, 0])?,
+            TAPState::RunTestIdle => self.mode(bv![1, 1, 0, 0])?,
+            TAPState::Exit1IR => self.mode(bv![0, 1, 0])?,
+            TAPState::Exit1DR => self.mode(bv![1, 1, 1, 0, 0])?,
+            TAPState::PauseIR => self.mode(bv![1, 0])?,
+            TAPState::PauseDR => self.mode(bv![1, 1, 1, 1, 0, 0])?,
             TAPState::UpdateIR | TAPState::UpdateDR => self.mode(bv![1, 1, 0, 0])?,
-            _                                       => return Err(Error::BadState),
+            _ => return Err(Error::BadState),
         }
         self.state = TAPState::ShiftIR;
         Ok(())
@@ -209,9 +216,9 @@ impl JTAG {
     pub fn enter_pause_ir(&mut self) -> Result<()> {
         log::trace!("JTAG state: {:?} -> PauseIR", self.state);
         match self.state {
-            TAPState::PauseIR                       => (),
-            TAPState::Exit1IR                       => self.mode(bv![0])?,
-            _                                       => return Err(Error::BadState),
+            TAPState::PauseIR => (),
+            TAPState::Exit1IR => self.mode(bv![0])?,
+            _ => return Err(Error::BadState),
         }
         self.state = TAPState::PauseIR;
         Ok(())
@@ -221,10 +228,10 @@ impl JTAG {
     pub fn enter_update_ir(&mut self) -> Result<()> {
         log::trace!("JTAG state: {:?} -> UpdateIR", self.state);
         match self.state {
-            TAPState::UpdateIR                      => (),
-            TAPState::ShiftIR                       => self.mode(bv![1, 1])?,
-            TAPState::Exit1IR                       => self.mode(bv![1])?,
-            _                                       => return Err(Error::BadState),
+            TAPState::UpdateIR => (),
+            TAPState::ShiftIR => self.mode(bv![1, 1])?,
+            TAPState::Exit1IR => self.mode(bv![1])?,
+            _ => return Err(Error::BadState),
         }
         self.state = TAPState::UpdateIR;
         Ok(())
@@ -340,7 +347,12 @@ impl JTAG {
             (TAPState::ShiftDR, false) => TAPState::ShiftDR,
             _ => return Err(Error::BadState),
         };
-        log::trace!("JTAG state: {:?} -> {:?}, reading {} bits", self.state, new_state, n);
+        log::trace!(
+            "JTAG state: {:?} -> {:?}, reading {} bits",
+            self.state,
+            new_state,
+            n
+        );
 
         let tdo = self.sequences().read(n, exit)?.run()?;
 
@@ -360,7 +372,12 @@ impl JTAG {
             (TAPState::ShiftDR, false) => TAPState::ShiftDR,
             _ => return Err(Error::BadState),
         };
-        log::trace!("JTAG state: {:?} -> {:?}, writing {} bits", self.state, new_state, tdi.len());
+        log::trace!(
+            "JTAG state: {:?} -> {:?}, writing {} bits",
+            self.state,
+            new_state,
+            tdi.len()
+        );
         self.sequences().write(tdi, exit)?.run()?;
         self.state = new_state;
         Ok(())
@@ -378,7 +395,12 @@ impl JTAG {
             (TAPState::ShiftDR, false) => TAPState::ShiftDR,
             _ => return Err(Error::BadState),
         };
-        log::trace!("JTAG state: {:?} -> {:?}, writing {} bits", self.state, new_state, tdi.len());
+        log::trace!(
+            "JTAG state: {:?} -> {:?}, writing {} bits",
+            self.state,
+            new_state,
+            tdi.len()
+        );
         let tdo = self.sequences().exchange(tdi, exit)?.run()?;
         self.state = new_state;
         Ok(tdo)
@@ -429,10 +451,16 @@ impl JTAG {
         let len = self.max_length;
 
         // Completely fill xR with 0s, capture result.
-        let d0 = self.sequences().exchange(&vec![false; len+1], false)?.run()?;
+        let d0 = self
+            .sequences()
+            .exchange(&vec![false; len + 1], false)?
+            .run()?;
 
         // Completely fill xR with 1s, capture result, exit afterwards.
-        let d1 = self.sequences().exchange(&vec![true; len+1], true)?.run()?;
+        let d1 = self
+            .sequences()
+            .exchange(&vec![true; len + 1], true)?
+            .run()?;
         match self.state {
             TAPState::ShiftIR => self.state = TAPState::Exit1IR,
             TAPState::ShiftDR => self.state = TAPState::Exit1DR,
@@ -444,10 +472,13 @@ impl JTAG {
             Some(n) => {
                 log::info!("JTAG {} scan chain detected as {} bits long", name, n);
                 n
-            },
+            }
             None => {
-                log::error!("JTAG {} scan chain either broken or too long: \
-                             did not detect 1", name);
+                log::error!(
+                    "JTAG {} scan chain either broken or too long: \
+                             did not detect 1",
+                    name
+                );
                 return Err(Error::ScanChainBroken);
             }
         };
@@ -460,13 +491,20 @@ impl JTAG {
 
         // Check d0[n..] are all 0.
         if d0[n..].iter().any(|bit| *bit) {
-            log::warn!("JTAG {} scan chain either broken or too long: did not detect 0", name);
+            log::warn!(
+                "JTAG {} scan chain either broken or too long: did not detect 0",
+                name
+            );
             return Err(Error::ScanChainBroken);
         }
 
         // Extract d0[..n] as the initial scan chain contents.
         let data = &d0[..n];
-        log::trace!("JTAG {} scan chain contents: {:02X?}", name, bits_to_bytes(data));
+        log::trace!(
+            "JTAG {} scan chain contents: {:02X?}",
+            name,
+            bits_to_bytes(data)
+        );
         Ok(data.to_vec())
     }
 
@@ -560,7 +598,10 @@ pub struct JTAGChain {
 
 impl JTAGChain {
     pub fn new(idcodes: &[Option<IDCODE>], irlens: &[usize]) -> Self {
-        JTAGChain { idcodes: idcodes.to_vec(), irlens: irlens.to_vec() }
+        JTAGChain {
+            idcodes: idcodes.to_vec(),
+            irlens: irlens.to_vec(),
+        }
     }
 
     /// Return the number of TAPs in the chain.
@@ -584,12 +625,15 @@ impl JTAGChain {
 
     /// Format each TAP into a String suitable for display.
     pub fn to_lines(&self) -> Vec<String> {
-        self.idcodes().iter().zip(self.irlens()).enumerate().map(|(idx, (idcode, irlen))| {
-            match idcode {
+        self.idcodes()
+            .iter()
+            .zip(self.irlens())
+            .enumerate()
+            .map(|(idx, (idcode, irlen))| match idcode {
                 Some(idcode) => format!("{}: {} [IR length: {}]", idx, idcode, irlen),
-                None         => format!("{}: [Bypass, IR length: {}]", idx, irlen),
-            }
-        }).collect()
+                None => format!("{}: [Bypass, IR length: {}]", idx, irlen),
+            })
+            .collect()
     }
 }
 
@@ -618,7 +662,16 @@ impl JTAGTAP {
         let ir_suffix = irl[index + 1..].iter().sum();
         let dr_prefix = index;
         let dr_suffix = irl.len() - index - 1;
-        JTAGTAP { jtag, chain, index, ir_len, ir_prefix, ir_suffix, dr_prefix, dr_suffix }
+        JTAGTAP {
+            jtag,
+            chain,
+            index,
+            ir_len,
+            ir_prefix,
+            ir_suffix,
+            dr_prefix,
+            dr_suffix,
+        }
     }
 
     /// Returns the index of this TAP.
@@ -668,10 +721,12 @@ impl JTAGTAP {
     /// Move to Shift-IR, read the IR while writing 0xFF, then enter Update-IR.
     /// Returns the captured bits from TDO, leaving BYPASS in all IRs.
     pub fn read_ir(&mut self) -> Result<Vec<bool>> {
-        let tdo = self.jtag.read_ir(self.ir_prefix + self.ir_len + self.ir_suffix)?;
+        let tdo = self
+            .jtag
+            .read_ir(self.ir_prefix + self.ir_len + self.ir_suffix)?;
 
         // Cut out prefix and suffix IR data.
-        let tdo = tdo[self.ir_prefix..self.ir_prefix+self.ir_len].to_vec();
+        let tdo = tdo[self.ir_prefix..self.ir_prefix + self.ir_len].to_vec();
         Ok(tdo)
     }
 
@@ -690,7 +745,7 @@ impl JTAGTAP {
         let tdo = self.jtag.exchange_ir(&tdi)?;
 
         // Cut out prefix and suffix IR data.
-        let tdo = tdo[self.ir_prefix..self.ir_prefix+self.ir_len].to_vec();
+        let tdo = tdo[self.ir_prefix..self.ir_prefix + self.ir_len].to_vec();
         Ok(tdo)
     }
 
@@ -725,7 +780,7 @@ impl JTAGTAP {
     /// Returns the captured bits from TDO.
     pub fn read_dr(&mut self, n: usize) -> Result<Vec<bool>> {
         let tdo = self.jtag.read_dr(self.dr_prefix + n + self.dr_suffix)?;
-        let tdo = tdo[self.dr_prefix..self.dr_prefix+n].to_vec();
+        let tdo = tdo[self.dr_prefix..self.dr_prefix + n].to_vec();
         Ok(tdo)
     }
 
@@ -739,7 +794,7 @@ impl JTAGTAP {
         tdi.extend_from_slice(&vec![true; self.dr_suffix]);
 
         let tdo = self.jtag.exchange_dr(&tdi)?;
-        let tdo = tdo[self.dr_prefix..self.dr_prefix+dr.len()].to_vec();
+        let tdo = tdo[self.dr_prefix..self.dr_prefix + dr.len()].to_vec();
         Ok(tdo)
     }
 }
@@ -782,21 +837,19 @@ fn extract_idcodes(dr: &[bool]) -> Result<Vec<Option<IDCODE>>> {
 
 #[test]
 fn test_extract_idcode() {
-    assert_eq!(extract_idcodes(bv![
+    assert_eq!(
+        extract_idcodes(bv![
             // 0x3BA00477
-            1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0,
-            // 0x16410041
-            1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 0,
-            // BYPASS
-            0,
-            // 41111043
-            1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0,
-            1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0,
-            // BYPASS
+            1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1,
+            1, 0, 0, // 0x16410041
+            1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1,
+            0, 0, 0, // BYPASS
+            0, // 41111043
+            1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0,
+            0, 1, 0, // BYPASS
             0
-        ]).unwrap(),
+        ])
+        .unwrap(),
         vec![
             Some(IDCODE(0x3BA00477)),
             Some(IDCODE(0x16410041)),
@@ -824,15 +877,18 @@ fn test_extract_idcode() {
 /// /software/glasgow/applet/interface/jtag_probe/__init__.py#L712
 ///
 /// Returns Vec<usize>, with an entry for each TAP.
-fn extract_ir_lengths(ir: &[bool], n_taps: usize, expected: Option<&[usize]>)
-    -> Result<Vec<usize>>
-{
+fn extract_ir_lengths(
+    ir: &[bool],
+    n_taps: usize,
+    expected: Option<&[usize]>,
+) -> Result<Vec<usize>> {
     // Find all `10` patterns which indicate potential IR start positions.
-    let starts = ir.windows(2)
-                   .enumerate()
-                   .filter(|(_, w)| w[0] && !w[1])
-                   .map(|(i, _)| i)
-                   .collect::<Vec<usize>>();
+    let starts = ir
+        .windows(2)
+        .enumerate()
+        .filter(|(_, w)| w[0] && !w[1])
+        .map(|(i, _)| i)
+        .collect::<Vec<usize>>();
     log::trace!("Possible IR start positions: {:?}", starts);
 
     if n_taps == 0 {
@@ -849,23 +905,37 @@ fn extract_ir_lengths(ir: &[bool], n_taps: usize, expected: Option<&[usize]>)
     } else if let Some(expected) = expected {
         // If expected lengths are available, verify and return them.
         if expected.len() != n_taps {
-            log::error!("Number of provided IR lengths ({}) does not match \
-                         number of detected TAPs ({})", expected.len(), n_taps);
+            log::error!(
+                "Number of provided IR lengths ({}) does not match \
+                         number of detected TAPs ({})",
+                expected.len(),
+                n_taps
+            );
             Err(Error::InvalidIR)
         } else if expected.iter().sum::<usize>() != ir.len() {
-            log::error!("Sum of provided IR lengths ({}) does not match \
+            log::error!(
+                "Sum of provided IR lengths ({}) does not match \
                          length of IR scan ({} bits)",
-                         expected.iter().sum::<usize>(), ir.len());
+                expected.iter().sum::<usize>(),
+                ir.len()
+            );
             Err(Error::InvalidIR)
         } else {
-            let exp_starts = expected.iter()
-                                     .scan(0, |a, &x| { let b = *a; *a += x; Some(b) })
-                                     .collect::<Vec<usize>>();
+            let exp_starts = expected
+                .iter()
+                .scan(0, |a, &x| {
+                    let b = *a;
+                    *a += x;
+                    Some(b)
+                })
+                .collect::<Vec<usize>>();
             log::trace!("Provided IR start positions: {:?}", exp_starts);
             let unsupported = exp_starts.iter().filter(|s| !starts.contains(s)).count();
             if unsupported > 0 {
-                log::error!("Provided IR lengths imply an IR start position \
-                             which is not supported by the IR scan");
+                log::error!(
+                    "Provided IR lengths imply an IR start position \
+                             which is not supported by the IR scan"
+                );
                 Err(Error::InvalidIR)
             } else {
                 log::debug!("Verified provided IR lengths against IR scan");
@@ -911,29 +981,38 @@ fn test_extract_ir_lengths() {
     assert!(extract_ir_lengths(bv![1, 0, 1, 0, 1, 0], 2, None).is_err());
 
     // Extract length for one TAP
-    assert_eq!(extract_ir_lengths(bv![1, 0, 0, 0, 0, 0], 1, None).unwrap(), vec![6]);
+    assert_eq!(
+        extract_ir_lengths(bv![1, 0, 0, 0, 0, 0], 1, None).unwrap(),
+        vec![6]
+    );
     // Extract lengths for two unambiguous TAPs
-    assert_eq!(extract_ir_lengths(bv![1, 0, 0, 0, 1, 0], 2, None).unwrap(), vec![4, 2]);
+    assert_eq!(
+        extract_ir_lengths(bv![1, 0, 0, 0, 1, 0], 2, None).unwrap(),
+        vec![4, 2]
+    );
     // Extract lengths for three unambiguous TAPs
-    assert_eq!(extract_ir_lengths(bv![1, 0, 1, 0, 1, 0], 3, None).unwrap(), vec![2, 2, 2]);
+    assert_eq!(
+        extract_ir_lengths(bv![1, 0, 1, 0, 1, 0], 3, None).unwrap(),
+        vec![2, 2, 2]
+    );
     // Validate provided lengths
-    assert_eq!(extract_ir_lengths(bv![1, 0, 1, 0, 1, 0], 3, Some(&[2, 2, 2])).unwrap(),
-               vec![2, 2, 2]);
+    assert_eq!(
+        extract_ir_lengths(bv![1, 0, 1, 0, 1, 0], 3, Some(&[2, 2, 2])).unwrap(),
+        vec![2, 2, 2]
+    );
 }
 
 /// Convert a list of start positions to a list of lengths.
 fn starts_to_lens(starts: &[usize], total: usize) -> Vec<usize> {
-    let mut lens: Vec<usize> = starts.windows(2)
-                                     .map(|w| w[1] - w[0])
-                                     .collect();
+    let mut lens: Vec<usize> = starts.windows(2).map(|w| w[1] - w[0]).collect();
     lens.push(total - lens.iter().sum::<usize>());
     lens
 }
 
 #[test]
 fn test_starts_to_lens() {
-    assert_eq!(starts_to_lens(&[0],       6), vec![6]);
-    assert_eq!(starts_to_lens(&[0, 3],    6), vec![3, 3]);
+    assert_eq!(starts_to_lens(&[0], 6), vec![6]);
+    assert_eq!(starts_to_lens(&[0, 3], 6), vec![3, 3]);
     assert_eq!(starts_to_lens(&[0, 2, 4], 6), vec![2, 2, 2]);
 }
 
@@ -985,12 +1064,19 @@ impl DAPSequences {
     /// tdi: optional data to clock out TDI, bits in transmission order,
     ///      set to all-1 if None.
     /// capture: if true, capture TDO state during this sequence.
-    pub fn add_sequence(&mut self, len: usize, tms: bool, tdi: Option<&[bool]>, capture: bool)
-        -> Result<()>
-    {
+    pub fn add_sequence(
+        &mut self,
+        len: usize,
+        tms: bool,
+        tdi: Option<&[bool]>,
+        capture: bool,
+    ) -> Result<()> {
         // Check length is within CMSIS-DAP bounds.
         if len == 0 || len > 64 {
-            log::error!("Sequence length must be between 1 and 64 bits, but is {}", len);
+            log::error!(
+                "Sequence length must be between 1 and 64 bits, but is {}",
+                len
+            );
             return Err(Error::InvalidSequence);
         }
 
@@ -1050,11 +1136,18 @@ impl DAPSequences {
     pub fn run(self, dap: &DAP) -> Result<Vec<bool>> {
         let request = self.to_bytes();
         let result = dap.jtag_sequence(&request[..])?;
-        let expected_n_bytes = self.capture_lengths.iter().map(|l| (l+7)/8).sum::<usize>();
+        let expected_n_bytes = self
+            .capture_lengths
+            .iter()
+            .map(|l| (l + 7) / 8)
+            .sum::<usize>();
         // Check for undersized data from probe.
         if result.len() < expected_n_bytes {
-            log::error!("Expected at least {} bytes from probe, but only got {}",
-                        expected_n_bytes, result.len());
+            log::error!(
+                "Expected at least {} bytes from probe, but only got {}",
+                expected_n_bytes,
+                result.len()
+            );
             Err(Error::UnexpectedJTAGLength)
         } else {
             // CMSIS-DAPv1 probes will always return a full HID report of 64 bytes,
@@ -1068,7 +1161,7 @@ impl DAPSequences {
             let mut bits = Vec::new();
             for l in self.capture_lengths.iter() {
                 bits.append(&mut bytes_to_bits(bytes, *l)?);
-                bytes = &bytes[(l+7)/8..];
+                bytes = &bytes[(l + 7) / 8..];
             }
             Ok(bits)
         }
@@ -1089,12 +1182,18 @@ impl<'a> Sequences<'a> {
     /// Defaults to a 64-byte maximum packet size.
     #[cfg(test)]
     fn new() -> Self {
-        Sequences { dap: None, sequences: Vec::new() }
+        Sequences {
+            dap: None,
+            sequences: Vec::new(),
+        }
     }
 
     /// Create a new Sequences object which can be sent to the provided DAP.
     pub fn with_dap(dap: &'a DAP) -> Self {
-        Sequences { dap: Some(dap), sequences: Vec::new() }
+        Sequences {
+            dap: Some(dap),
+            sequences: Vec::new(),
+        }
     }
 
     /// Add a new sequence to this set of sequences.
@@ -1104,9 +1203,13 @@ impl<'a> Sequences<'a> {
     /// tdi: optional data to clock out TDI, bits in transmission order,
     ///      set to all-1 if None.
     /// capture: if true, capture TDO state during this sequence.
-    pub fn add_sequence(&mut self, len: usize, tms: bool, tdi: Option<&[bool]>, capture: bool)
-        -> Result<()>
-    {
+    pub fn add_sequence(
+        &mut self,
+        len: usize,
+        tms: bool,
+        tdi: Option<&[bool]>,
+        capture: bool,
+    ) -> Result<()> {
         let sequences = self.sequences_for_len(len);
         sequences.add_sequence(len, tms, tdi, capture)
     }
@@ -1118,9 +1221,13 @@ impl<'a> Sequences<'a> {
     /// tdi: optional data to clock out TDI, bits in transmission order,
     ///      set to all-1 if None.
     /// capture: if true, capture TDO state during this sequence.
-    pub fn add_sequences(&mut self, len: usize, tms: bool, tdi: Option<&[bool]>, capture: bool)
-        -> Result<()>
-    {
+    pub fn add_sequences(
+        &mut self,
+        len: usize,
+        tms: bool,
+        tdi: Option<&[bool]>,
+        capture: bool,
+    ) -> Result<()> {
         // Check correct length of data is provided.
         if let Some(tdi) = tdi {
             if tdi.len() != len {
@@ -1135,8 +1242,8 @@ impl<'a> Sequences<'a> {
         while idx < len {
             let n = usize::min(len - idx, self.sequences_max_len());
             match tdi {
-                Some(tdi) => self.add_sequence(n, tms, Some(&tdi[idx..idx+n]), capture)?,
-                None      => self.add_sequence(n, tms, None, capture)?,
+                Some(tdi) => self.add_sequence(n, tms, Some(&tdi[idx..idx + n]), capture)?,
+                None => self.add_sequence(n, tms, None, capture)?,
             }
             idx += n;
         }
@@ -1181,9 +1288,9 @@ impl<'a> Sequences<'a> {
                 0 => {
                     self.new_sequences();
                     64
-                },
+                }
                 n => n,
-            }
+            },
             None => {
                 self.new_sequences();
                 64
@@ -1224,8 +1331,8 @@ impl<'a> Sequences<'a> {
     pub fn write(mut self, tdi: &[bool], exit: bool) -> Result<Self> {
         let len = tdi.len();
         if exit {
-            self.add_sequences(len - 1, false, Some(&tdi[..len-1]), false)?;
-            self.add_sequences(1, true, Some(&[tdi[len-1]]), false)?;
+            self.add_sequences(len - 1, false, Some(&tdi[..len - 1]), false)?;
+            self.add_sequences(1, true, Some(&[tdi[len - 1]]), false)?;
         } else {
             self.add_sequences(len, false, Some(tdi), false)?;
         }
@@ -1253,8 +1360,8 @@ impl<'a> Sequences<'a> {
     pub fn exchange(mut self, tdi: &[bool], exit: bool) -> Result<Self> {
         let len = tdi.len();
         if exit {
-            self.add_sequences(len - 1, false, Some(&tdi[..len-1]), true)?;
-            self.add_sequences(1, true, Some(&[tdi[len-1]]), true)?;
+            self.add_sequences(len - 1, false, Some(&tdi[..len - 1]), true)?;
+            self.add_sequences(1, true, Some(&[tdi[len - 1]]), true)?;
         } else {
             self.add_sequences(len, false, Some(tdi), true)?;
         }
@@ -1288,7 +1395,18 @@ fn test_sequences() {
     seqs.add_sequences(64, false, None, false).unwrap();
     assert_eq!(
         seqs.to_bytes(),
-        vec![vec![1, 0b0_0_00000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]]
+        vec![vec![
+            1,
+            0b0_0_00000000,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF
+        ]]
     );
 
     // 65 bits should require 2 sequences.
@@ -1296,17 +1414,42 @@ fn test_sequences() {
     seqs.add_sequences(65, false, None, false).unwrap();
     assert_eq!(
         seqs.to_bytes(),
-        vec![vec![2, 0b0_0_00000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                  0b0_0_00000001, 0xFF]]
+        vec![vec![
+            2,
+            0b0_0_00000000,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0b0_0_00000001,
+            0xFF
+        ]]
     );
 
     // 65 bits with TDI provided.
     let mut seqs = Sequences::new();
-    seqs.add_sequences(65, false, Some(&[false; 65]), false).unwrap();
+    seqs.add_sequences(65, false, Some(&[false; 65]), false)
+        .unwrap();
     assert_eq!(
         seqs.to_bytes(),
-        vec![vec![2, 0b0_0_00000000, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                  0b0_0_00000001, 0x00]]
+        vec![vec![
+            2,
+            0b0_0_00000000,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0b0_0_00000001,
+            0x00
+        ]]
     );
 }
 
@@ -1332,8 +1475,19 @@ fn test_sequences_mode() {
 
     // Three separate requests with 1, 3, and 1 clocks.
     assert_eq!(
-        Sequences::new().mode(bv![0, 1, 1, 1, 0]).unwrap().to_bytes(),
-        vec![vec![3, 0b0_0_000001, 0xFF, 0b0_1_000011, 0xFF, 0b0_0_000001, 0xFF]]
+        Sequences::new()
+            .mode(bv![0, 1, 1, 1, 0])
+            .unwrap()
+            .to_bytes(),
+        vec![vec![
+            3,
+            0b0_0_000001,
+            0xFF,
+            0b0_1_000011,
+            0xFF,
+            0b0_0_000001,
+            0xFF
+        ]]
     );
 }
 
@@ -1341,19 +1495,28 @@ fn test_sequences_mode() {
 fn test_sequences_write() {
     // No exit bit generates one sequence with 4 clocks.
     assert_eq!(
-        Sequences::new().write(bv![1, 0, 1, 0], false).unwrap().to_bytes(),
+        Sequences::new()
+            .write(bv![1, 0, 1, 0], false)
+            .unwrap()
+            .to_bytes(),
         vec![vec![1, 0b0_0_000100, 0x05]]
     );
 
     // Exit bit set generates two sequences with TMS set on second.
     assert_eq!(
-        Sequences::new().write(bv![1, 0, 1, 0], true).unwrap().to_bytes(),
+        Sequences::new()
+            .write(bv![1, 0, 1, 0], true)
+            .unwrap()
+            .to_bytes(),
         vec![vec![2, 0b0_0_000011, 0x05, 0b0_1_000001, 0x00]]
     );
 
     // Long sequence is split into multiple bytes.
     assert_eq!(
-        Sequences::new().write(bv![1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1], false).unwrap().to_bytes(),
+        Sequences::new()
+            .write(bv![1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1], false)
+            .unwrap()
+            .to_bytes(),
         vec![vec![1, 0b0_0_001100, 0xFF, 0x08]]
     );
 }
@@ -1383,20 +1546,28 @@ fn test_sequences_read() {
 fn test_sequences_exchange() {
     // No exit bit generates one sequence with 4 clocks.
     assert_eq!(
-        Sequences::new().exchange(bv![1, 0, 1, 0], false).unwrap().to_bytes(),
+        Sequences::new()
+            .exchange(bv![1, 0, 1, 0], false)
+            .unwrap()
+            .to_bytes(),
         vec![vec![1, 0b1_0_000100, 0x05]]
     );
 
     // Exit bit set generates two sequences with TMS set on second.
     assert_eq!(
-        Sequences::new().exchange(bv![1, 0, 1, 0], true).unwrap().to_bytes(),
+        Sequences::new()
+            .exchange(bv![1, 0, 1, 0], true)
+            .unwrap()
+            .to_bytes(),
         vec![vec![2, 0b1_0_000011, 0x05, 0b1_1_000001, 0x00]]
     );
 
     // Long sequence is split into multiple bytes.
     assert_eq!(
-        Sequences::new().exchange(
-            bv![1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1], false).unwrap().to_bytes(),
+        Sequences::new()
+            .exchange(bv![1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1], false)
+            .unwrap()
+            .to_bytes(),
         vec![vec![1, 0b1_0_001100, 0xFF, 0x08]]
     );
 }
@@ -1406,12 +1577,30 @@ fn test_sequences_multiple() {
     // Should see TMS=1 for 5 clocks, TMS=0 for 1 clock, TMS=1 for 1 clock, TMS=0 for 2 clocks,
     // then capture for 31 bits with TMS=0, then capture for 1 bit with TMS=1.
     assert_eq!(
-        Sequences::new().mode(bv![1, 1, 1, 1, 1, 0, 1, 0, 0]).unwrap()
-                        .read(32, true).unwrap()
-                        .to_bytes(),
-        vec![vec![6,
-                  0b0_1_000101, 0xFF, 0b0_0_000001, 0xFF, 0b0_1_000001, 0xFF, 0b0_0_000010, 0xFF,
-                  0b1_0_011111, 0xFF, 0xFF, 0xFF, 0xFF, 0b1_1_000001, 0xFF]]
+        Sequences::new()
+            .mode(bv![1, 1, 1, 1, 1, 0, 1, 0, 0])
+            .unwrap()
+            .read(32, true)
+            .unwrap()
+            .to_bytes(),
+        vec![vec![
+            6,
+            0b0_1_000101,
+            0xFF,
+            0b0_0_000001,
+            0xFF,
+            0b0_1_000001,
+            0xFF,
+            0b0_0_000010,
+            0xFF,
+            0b1_0_011111,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
+            0b1_1_000001,
+            0xFF
+        ]]
     );
 }
 
@@ -1421,23 +1610,160 @@ fn test_sequences_long() {
     assert_eq!(
         Sequences::new().read(1024, false).unwrap().to_bytes(),
         vec![
-            vec![7, 0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_111000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
-            vec![7, 0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_111000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
-            vec![3, 0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_000000, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                    0b1_0_010000, 0xFF, 0xFF],
+            vec![
+                7,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_111000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF
+            ],
+            vec![
+                7,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_111000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF
+            ],
+            vec![
+                3,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_000000,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0b1_0_010000,
+                0xFF,
+                0xFF
+            ],
         ]
     );
 }
